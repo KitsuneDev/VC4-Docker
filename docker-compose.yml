@@ -1,0 +1,24 @@
+services:
+  vc4:
+    build:
+      context: vc4
+      dockerfile: Dockerfile
+    ports:
+      - 8847:80
+      - 8848:443
+      - 843:843
+      - 41794/tcp
+      - 41794/udp
+      - 41796/tcp
+      - 49200:49200
+    environment:
+      VC4_DISABLE_FRONTEND_LOCALHOST_MOCKS: "true"
+      VC4_ENABLE_RESTART_SERVICE_SHIM: "true"
+    volumes:
+      - vc4_mysql:/var/lib/mysql
+      - vc4_crestron:/opt/crestron
+      - vc4_redis:/var/lib/redis
+volumes:
+  vc4_mysql:
+  vc4_crestron:
+  vc4_redis:

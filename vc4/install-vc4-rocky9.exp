@@ -1,0 +1,164 @@
+#!/usr/bin/expect -f
+
+set timeout -1
+log_user 1
+
+set db_root_password "password"
+if {[info exists env(MARIADB_ROOT_PASSWORD)]} {
+    set db_root_password $env(MARIADB_ROOT_PASSWORD)
+}
+
+# The ZIP in your Dockerfile appears to contain install-vc4.sh,
+# but this also tolerates the installVC4.sh naming.
+set installer ""
+foreach candidate {"./install-vc4.sh" "./installVC4.sh"} {
+    if {[file exists $candidate]} {
+        set installer $candidate
+        break
+    }
+}
+
+if {$installer eq ""} {
+    puts stderr "Could not find ./install-vc4.sh or ./installVC4.sh in [pwd]"
+    exit 127
+}
+
+spawn bash -lc {
+    installer="$1"
+
+    systemctl() {
+        if [[ "$1" == "start" && ( "$2" == "virtualcontrol" || "$2" == "virtualcontrol.service" ) ]]; then
+            echo "[docker-build] Skipping systemctl start $2 during image build"
+            return 0
+        fi
+
+        /usr/local/bin/docker-systemctl "$@"
+    }
+
+    sudo() {
+        "$@"
+    }
+
+    export -f systemctl
+    export -f sudo
+
+    chmod +x "$installer"
+    exec "$installer"
+} bash $installer
+
+expect {
+    -re {If you agree.*press y/Y.*:} {
+        send -- "y\r"
+        exp_continue
+    }
+
+    -re {IPv4 rules\?} {
+        send -- "yes\r"
+        exp_continue
+    }
+
+    -re {IPv6 rules\?} {
+        send -- "yes\r"
+        exp_continue
+    }
+
+    -re {Default Kerberos version 5 realm} {
+        send -- "\r"
+        exp_continue
+    }
+
+    -re {LDAP server Uniform Resource Identifier} {
+        send -- "\r"
+        exp_continue
+    }
+
+    -re {Distinguished name of the search base} {
+        send -- "\r"
+        exp_continue
+    }
+
+    -re {LDAP version to use} {
+        send -- "1\r"
+        exp_continue
+    }
+
+    -re {Make local root Database admin} {
+        send -- "no\r"
+        exp_continue
+    }
+
+    -re {Does the LDAP database require login} {
+        send -- "no\r"
+        exp_continue
+    }
+
+    -re {Please provide the installation directory.*default} {
+        send -- "\r"
+        exp_continue
+    }
+
+    -re {Please provide the password for the MariaDB Root user} {
+        send -- "$db_root_password\r"
+        exp_continue
+    }
+
+    -re {Please confirm the password for root} {
+        send -- "$db_root_password\r"
+        exp_continue
+    }
+
+    -re {Please provide a name for the database.*default} {
+        send -- "\r"
+        exp_continue
+    }
+
+    -re {Please provide the name for the database.*user account} {
+        send -- "\r"
+        exp_continue
+    }
+
+    -re {Please provide a password for the virtualcontrol user.*default} {
+        send -- "\r"
+        exp_continue
+    }
+    
+    -nocase -re {Are you migrating.*VC4.*another build.*\(Y/N\).*:} {
+        send -- "N\r"
+        exp_continue
+    }
+
+    -nocase -re {Enter virtualcontrol Home Path.*Default} {
+        send -- "\r"
+        exp_continue
+    }
+
+    -nocase -re {Please provide .* port number.*Default} {
+        send -- "\r"
+        exp_continue
+    }
+
+    -nocase -re {Please provide new password for the MariaDB Root user} {
+        send -- "$db_root_password\r"
+        exp_continue
+    }
+
+    -nocase -re {Please provide new password for the MariaDB Root user} {
+        send -- "$db_root_password\r"
+        exp_continue
+    }
+
+    -nocase -re {Please provide the.*default} {
+        send -- "\r"
+        exp_continue
+    }
+
+    eof {
+        catch wait result
+        exit [lindex $result 3]
+    }
+
+    timeout {
+        puts stderr "Timed out waiting for VC4 installer prompt"
+        exit 124
+    }
+}
