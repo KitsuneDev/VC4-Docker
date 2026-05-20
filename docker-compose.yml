@@ -14,10 +14,35 @@ services:
     environment:
       VC4_DISABLE_FRONTEND_LOCALHOST_MOCKS: "true"
       VC4_ENABLE_RESTART_SERVICE_SHIM: "true"
+      # Hardening options from the VC-4 manual. Leave empty/false to keep the
+      # vendor defaults. Mount referenced files into the container first.
+      VC4_TLS_CERT_FILE: "${VC4_TLS_CERT_FILE:-}"
+      VC4_TLS_KEY_FILE: "${VC4_TLS_KEY_FILE:-}"
+      # disabled, secure, or unsecure. Domain defaults to * and port to 1025.
+      VC4_FLASH_POLICY_MODE: "${VC4_FLASH_POLICY_MODE:-}"
+      VC4_FLASH_POLICY_DOMAIN: "${VC4_FLASH_POLICY_DOMAIN:-*}"
+      VC4_FLASH_POLICY_PORT: "${VC4_FLASH_POLICY_PORT:-1025}"
+      VC4_CGROUP_CONFIG_FILE: "${VC4_CGROUP_CONFIG_FILE:-}"
+      # Numeric VC4 System Setup values as used by the WebApi/SystemTable API.
+      VC4_SECURE_GATEWAY_MODE: "${VC4_SECURE_GATEWAY_MODE:-}"
+      VC4_OCSP_STATE: "${VC4_OCSP_STATE:-}"
+      # PAM-backed basic auth. Admin protects /config/settings; status protects
+      # /config/status. Room credentials file is TSV:
+      # room_id<TAB>username<TAB>password<TAB>targets
+      # targets defaults to cws,xpanel,html.
+      VC4_PAM_REQUIRE_SSL: "${VC4_PAM_REQUIRE_SSL:-true}"
+      VC4_PAM_ADMIN_ENABLED: "${VC4_PAM_ADMIN_ENABLED:-false}"
+      VC4_PAM_ADMIN_USERNAME: "${VC4_PAM_ADMIN_USERNAME:-}"
+      VC4_PAM_ADMIN_PASSWORD: "${VC4_PAM_ADMIN_PASSWORD:-}"
+      VC4_PAM_STATUS_ENABLED: "${VC4_PAM_STATUS_ENABLED:-false}"
+      VC4_PAM_STATUS_USERNAME: "${VC4_PAM_STATUS_USERNAME:-}"
+      VC4_PAM_STATUS_PASSWORD: "${VC4_PAM_STATUS_PASSWORD:-}"
+      VC4_PAM_ROOM_CREDENTIALS_FILE: "${VC4_PAM_ROOM_CREDENTIALS_FILE:-}"
     volumes:
       - vc4_mysql:/var/lib/mysql
       - vc4_crestron:/opt/crestron
       - vc4_redis:/var/lib/redis
+      - ./data/hardening:/run/vc4-hardening:ro
 volumes:
   vc4_mysql:
   vc4_crestron:

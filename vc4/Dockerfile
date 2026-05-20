@@ -54,11 +54,13 @@ RUN mkdir -p /usr/local/libexec
 COPY vc4-entrypoint.sh /usr/local/sbin/vc4-entrypoint.sh
 COPY vc4-container-restart.sh /usr/local/sbin/vc4-container-restart.sh
 COPY vc4-container-restart-launch.sh /usr/local/sbin/vc4-container-restart-launch.sh
+COPY vc4-pam-file-auth.sh /usr/local/sbin/vc4-pam-file-auth.sh
 COPY vc4-restart-service.cgi /usr/local/libexec/vc4-restart-service.cgi
 RUN chmod +x \
     /usr/local/sbin/vc4-entrypoint.sh \
     /usr/local/sbin/vc4-container-restart.sh \
     /usr/local/sbin/vc4-container-restart-launch.sh \
+    /usr/local/sbin/vc4-pam-file-auth.sh \
     /usr/local/libexec/vc4-restart-service.cgi
 
 RUN printf 'apache ALL=(root) NOPASSWD: /usr/local/sbin/vc4-container-restart-launch.sh\n' > /etc/sudoers.d/vc4-container-restart && \
@@ -76,6 +78,19 @@ RUN chmod +x /usr/local/bin/cgconfigparser && \
     ln -sf /usr/local/bin/cgconfigparser /usr/sbin/cgconfigparser && \
     command -v cgconfigparser && \
     ldconfig -p | grep -F libatomic
+
+RUN dnf -y install mod_ssl mod_authnz_pam && \
+    dnf clean all && \
+    mkdir -p /etc/pki/tls/certs /etc/pki/tls/private && \
+    if [[ ! -s /etc/pki/tls/certs/localhost.crt || ! -s /etc/pki/tls/private/localhost.key ]]; then \
+      openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3650 \
+        -subj '/CN=localhost' \
+        -keyout /etc/pki/tls/private/localhost.key \
+        -out /etc/pki/tls/certs/localhost.crt; \
+    fi && \
+    if ! grep -q '^LoadModule authnz_pam_module' /etc/httpd/conf.modules.d/55-authnz_pam.conf; then \
+      echo 'LoadModule authnz_pam_module modules/mod_authnz_pam.so' >> /etc/httpd/conf.modules.d/55-authnz_pam.conf; \
+    fi
 
 EXPOSE 80 443 843 41794/tcp 41794/udp 41796 49200
 
