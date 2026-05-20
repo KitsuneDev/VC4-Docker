@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+real_systemctl="/usr/local/bin/docker-systemctl"
+restart_launcher="/usr/local/sbin/vc4-container-restart-launch.sh"
+
+normalize_unit() {
+  local unit="$1"
+  unit="${unit##*/}"
+  unit="${unit%.service}"
+  printf '%s' "$unit"
+}
+
+command_name=""
+unit_name=""
+for arg in "$@"; do
+  if [[ "$arg" == -* ]]; then
+    continue
+  fi
+  if [[ -z "$command_name" ]]; then
+    command_name="$arg"
+    continue
+  fi
+  if [[ -z "$unit_name" ]]; then
+    unit_name="$arg"
+    break
+  fi
+done
+
+case "$command_name" in
+  restart|try-restart|reload-or-restart|reload-or-try-restart)
+    if [[ "$(normalize_unit "$unit_name")" == "virtualcontrol" ]]; then
+      echo "[vc4-systemctl-shim] scheduling Docker-local virtualcontrol restart for: systemctl $*" >&2
+      if [[ "$(id -u)" == "0" ]]; then
+        nohup "$restart_launcher" >/dev/null 2>&1 &
+      else
+        nohup /usr/bin/sudo -n "$restart_launcher" >/dev/null 2>&1 &
+      fi
+      exit 0
+    fi
+    ;;
+esac
+
+exec "$real_systemctl" "$@"

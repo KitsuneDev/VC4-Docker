@@ -1,0 +1,31 @@
+# Each room can have independent credentials and protected targets.
+# targets defaults to ["cws", "xpanel", "html"] when omitted.
+# Optional default credentials protect rooms that do not have a room-specific
+# credential for that target.
+
+[default]
+username = "default-room-user"
+password = "default-room-pass"
+targets = ["cws", "html"]
+
+[[rooms]]
+id = "room-a"
+username = "roomuser"
+password = "roompass"
+targets = ["cws", "xpanel", "html"]
+
+[[rooms]]
+id = "room-b"
+targets = ["cws", "xpanel", "html"]
+
+[rooms.credentials.cws]
+username = "room-b-cws"
+password = "cws-password"
+
+[rooms.credentials.xpanel]
+username = "room-b-panel"
+password = "panel-password"
+
+[rooms.credentials.html]
+username = "room-b-html"
+password = "html-password"

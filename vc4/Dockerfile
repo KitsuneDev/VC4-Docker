@@ -1,3 +1,12 @@
+FROM rust:1-alpine AS helpers
+
+WORKDIR /src/helpers
+RUN apk add --no-cache musl-dev
+COPY helpers/Cargo.toml ./Cargo.toml
+COPY helpers/vc4-room-auth/Cargo.toml ./vc4-room-auth/Cargo.toml
+COPY helpers/vc4-room-auth/src ./vc4-room-auth/src
+RUN cargo build --release --target x86_64-unknown-linux-musl -p vc4-room-auth
+
 FROM rockylinux/rockylinux:9.3
 
 
@@ -29,8 +38,8 @@ RUN pip3 install --no-cache-dir docker-systemctl-replacement && \
 
 WORKDIR /home/crestron
 
-COPY installer/vc4.zip /home/crestron/vc4.zip
-COPY install-vc4-rocky9.exp /usr/local/bin/install-vc4-rocky9.exp
+COPY vc4/installer/vc4.zip /home/crestron/vc4.zip
+COPY vc4/install-vc4-rocky9.exp /usr/local/bin/install-vc4-rocky9.exp
 
 
 RUN sed -i 's/\r$//' /usr/local/bin/install-vc4-rocky9.exp && \
@@ -51,19 +60,22 @@ RUN sed -i 's/\r$//' /usr/local/bin/install-vc4-rocky9.exp && \
 
 RUN mkdir -p /usr/local/libexec
 
-COPY vc4-entrypoint.sh /usr/local/sbin/vc4-entrypoint.sh
-COPY vc4-container-restart.sh /usr/local/sbin/vc4-container-restart.sh
-COPY vc4-container-restart-launch.sh /usr/local/sbin/vc4-container-restart-launch.sh
-COPY vc4-pam-file-auth.sh /usr/local/sbin/vc4-pam-file-auth.sh
-COPY vc4-restart-service.cgi /usr/local/libexec/vc4-restart-service.cgi
+COPY --from=helpers /src/helpers/target/x86_64-unknown-linux-musl/release/vc4-room-auth /usr/local/bin/vc4-room-auth
+COPY vc4/vc4-entrypoint.sh /usr/local/sbin/vc4-entrypoint.sh
+COPY vc4/vc4-container-restart.sh /usr/local/sbin/vc4-container-restart.sh
+COPY vc4/vc4-container-restart-launch.sh /usr/local/sbin/vc4-container-restart-launch.sh
+COPY vc4/vc4-systemctl-shim /usr/local/sbin/vc4-systemctl-shim
+COPY vc4/vc4-pam-file-auth.sh /usr/local/sbin/vc4-pam-file-auth.sh
+COPY vc4/vc4-restart-service.cgi /usr/local/libexec/vc4-restart-service.cgi
 RUN chmod +x \
     /usr/local/sbin/vc4-entrypoint.sh \
     /usr/local/sbin/vc4-container-restart.sh \
     /usr/local/sbin/vc4-container-restart-launch.sh \
+    /usr/local/sbin/vc4-systemctl-shim \
     /usr/local/sbin/vc4-pam-file-auth.sh \
     /usr/local/libexec/vc4-restart-service.cgi
 
-RUN printf 'apache ALL=(root) NOPASSWD: /usr/local/sbin/vc4-container-restart-launch.sh\n' > /etc/sudoers.d/vc4-container-restart && \
+RUN printf 'apache ALL=(root) NOPASSWD: /usr/local/sbin/vc4-container-restart-launch.sh\nvirtualcontroluser ALL=(root) NOPASSWD: /usr/local/sbin/vc4-container-restart-launch.sh\n' > /etc/sudoers.d/vc4-container-restart && \
     chmod 0440 /etc/sudoers.d/vc4-container-restart
 
 RUN dnf -y install libatomic && \

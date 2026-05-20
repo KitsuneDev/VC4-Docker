@@ -1,0 +1,9 @@
+.git
+.env
+logs.txt
+vc4-manual.pdf
+vc4/installer/*
+!vc4/installer/vc4.zip
+!vc4/installer/.gitkeep
+target
+helpers/target

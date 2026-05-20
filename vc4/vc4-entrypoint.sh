@@ -47,6 +47,7 @@ patch_restart_service_endpoint() {
     return 0
   fi
 
+  perl -0pi -e 's|\n# VC4 Docker restart shim begin\n.*?\n# VC4 Docker restart shim end\n\n||s' "$conf"
   perl -0pi -e 's|\n# VC4 Docker RestartService override\nProxyPass "/VirtualControl/config/settings/WebApi/RestartService" "!"\nScriptAlias "/VirtualControl/config/settings/WebApi/RestartService" "/usr/local/libexec/vc4-restart-service.cgi"\n<Directory "/usr/local/libexec">\n  Options \+ExecCGI\n  Require all granted\n</Directory>\n\n|\n|g' "$conf"
   perl -0pi -e 's|<LocationMatch "\^\$\{CRESTRON_VC_4_WEBROOT\}/config/settings/WebApi/\(\?!RestartService\\\$\)">(\n\s+ProxyPass "http://127\.0\.0\.1:\$\{CRESTRON_WEBAPI_CGI_PORT\}/"\n\s+ProxyPassReverse "http://127\.0\.0\.1:\$\{CRESTRON_WEBAPI_CGI_PORT\}/"\n\s+Header set Cache-Control "max-age=0, no-cache, no-store, must-revalidate, private"\n\s+Header set Pragma "no-cache"\n)</LocationMatch>|<Location "\${CRESTRON_VC_4_WEBROOT}/config/settings/WebApi/">$1</Location>|g' "$conf"
 
@@ -54,12 +55,23 @@ patch_restart_service_endpoint() {
     return 0
   fi
 
-  perl -0pi -e 's|AliasMatch "\(\?i\)\^\$\{CRESTRON_VC_4_WEBROOT\}/config/status\(.\*\)"|# VC4 Docker RestartService override\nProxyPass "/VirtualControl/config/settings/WebApi/RestartService" "!"\nScriptAlias "/VirtualControl/config/settings/WebApi/RestartService" "/usr/local/libexec/vc4-restart-service.cgi"\n<Directory "/usr/local/libexec">\n  Options +ExecCGI\n  Require all granted\n</Directory>\n\nAliasMatch "(?i)^\${CRESTRON_VC_4_WEBROOT}/config/status(.*)"|' "$conf"
+  perl -0pi -e 's|AliasMatch "\(\?i\)\^\$\{CRESTRON_VC_4_WEBROOT\}/config/status\(.\*\)"|# VC4 Docker restart shim begin\nProxyPass "/VirtualControl/config/settings/WebApi/RestartService" "!"\nScriptAlias "/VirtualControl/config/settings/WebApi/RestartService" "/usr/local/libexec/vc4-restart-service.cgi"\n<Directory "/usr/local/libexec">\n  Options +ExecCGI\n  Require all granted\n</Directory>\n# VC4 Docker restart shim end\n\nAliasMatch "(?i)^\${CRESTRON_VC_4_WEBROOT}/config/status(.*)"|' "$conf"
 
   # Keep every settings WebApi route on the vendor backend except the service
   # restart URL. The original broad Location proxy wins over ScriptAlias, so
   # narrow it with a negative match instead of relying on Location precedence.
   perl -0pi -e 's|<Location(?:Match)? "\^?\$?\{?CRESTRON_VC_4_WEBROOT\}?/config/settings/WebApi/[^"]*">(\n\s+ProxyPass "http://127\.0\.0\.1:\$\{CRESTRON_WEBAPI_CGI_PORT\}/"\n\s+ProxyPassReverse "http://127\.0\.0\.1:\$\{CRESTRON_WEBAPI_CGI_PORT\}/"\n\s+Header set Cache-Control "max-age=0, no-cache, no-store, must-revalidate, private"\n\s+Header set Pragma "no-cache"\n)</Location(?:Match)?>|<LocationMatch "^\${CRESTRON_VC_4_WEBROOT}/config/settings/WebApi/(?!RestartService\$)">$1</LocationMatch>|' "$conf"
+}
+
+configure_systemctl_restart_shim() {
+  if [[ "${VC4_ENABLE_RESTART_SERVICE_SHIM:-false}" == "true" ]]; then
+    log "Enabling Docker-aware systemctl restart shim for virtualcontrol.service"
+    ln -sf /usr/local/sbin/vc4-systemctl-shim /usr/bin/systemctl
+    ln -sf /usr/local/sbin/vc4-systemctl-shim /bin/systemctl
+  else
+    ln -sf /usr/local/bin/docker-systemctl /usr/bin/systemctl
+    ln -sf /usr/local/bin/docker-systemctl /bin/systemctl
+  fi
 }
 
 apache_auth_block() {
@@ -77,6 +89,23 @@ apache_auth_block() {
   printf '  AuthPAMService %s\n' "$service"
   printf '  Require valid-user\n'
   printf '</Location>\n'
+}
+
+apache_auth_match_block() {
+  local location_match="$1"
+  local service="$2"
+  local require_ssl="${VC4_PAM_REQUIRE_SSL:-true}"
+
+  printf '<LocationMatch "%s">\n' "$location_match"
+  if [[ "$require_ssl" == "true" ]]; then
+    printf '  SSLRequireSSL\n'
+  fi
+  printf '  AuthType Basic\n'
+  printf '  AuthName "PAM Authentication"\n'
+  printf '  AuthBasicProvider PAM\n'
+  printf '  AuthPAMService %s\n' "$service"
+  printf '  Require valid-user\n'
+  printf '</LocationMatch>\n'
 }
 
 write_pam_service() {
@@ -103,6 +132,48 @@ write_credentials_file() {
 
 sanitize_pam_id() {
   printf '%s' "$1" | tr -c 'A-Za-z0-9_.-' '_'
+}
+
+room_target_location() {
+  local room_id="$1"
+  local target="$2"
+
+  case "$target" in
+    cws) printf '${CRESTRON_VC_4_WEBROOT}/Rooms/%s/cws/' "$room_id" ;;
+    xpanel) printf '${CRESTRON_VC_4_WEBROOT}/Rooms/%s/XPanel/Core3XPanel.html' "$room_id" ;;
+    html) printf '${CRESTRON_VC_4_WEBROOT}/Rooms/%s/Html/' "$room_id" ;;
+  esac
+}
+
+room_target_location_match() {
+  local excluded_rooms="$1"
+  local target="$2"
+  local room_pattern="[^/]+"
+
+  if [[ -n "$excluded_rooms" ]]; then
+    room_pattern="(?!(${excluded_rooms})/)${room_pattern}"
+  fi
+
+  case "$target" in
+    cws) printf '^\${CRESTRON_VC_4_WEBROOT}/Rooms/%s/cws/' "$room_pattern" ;;
+    xpanel) printf '^\${CRESTRON_VC_4_WEBROOT}/Rooms/%s/XPanel/Core3XPanel\.html$' "$room_pattern" ;;
+    html) printf '^\${CRESTRON_VC_4_WEBROOT}/Rooms/%s/Html/' "$room_pattern" ;;
+  esac
+}
+
+append_unique_regex_part() {
+  local existing="$1"
+  local part="$2"
+
+  if [[ -z "$existing" ]]; then
+    printf '%s' "$part"
+    return 0
+  fi
+  if [[ "|$existing|" == *"|$part|"* ]]; then
+    printf '%s' "$existing"
+    return 0
+  fi
+  printf '%s|%s' "$existing" "$part"
 }
 
 configure_pam_authentication() {
@@ -148,32 +219,82 @@ configure_pam_authentication() {
     if [[ ! -f "$VC4_PAM_ROOM_CREDENTIALS_FILE" ]]; then
       log "WARNING: VC4_PAM_ROOM_CREDENTIALS_FILE not found: $VC4_PAM_ROOM_CREDENTIALS_FILE"
     else
-      while IFS=$'\t' read -r room_id username password targets _ || [[ -n "${room_id:-}" ]]; do
-        [[ -z "${room_id:-}" || "${room_id:0:1}" == "#" ]] && continue
-        if [[ -z "${username:-}" || -z "${password:-}" ]]; then
-          log "WARNING: skipping PAM room entry with missing username/password for room: $room_id"
-          continue
-        fi
+      local room_rows
+      if ! room_rows="$(vc4-room-auth "$VC4_PAM_ROOM_CREDENTIALS_FILE")"; then
+        log "WARNING: failed to parse TOML room credentials file: $VC4_PAM_ROOM_CREDENTIALS_FILE"
+      else
+        local cws_exclusions=""
+        local xpanel_exclusions=""
+        local html_exclusions=""
+        local default_cws_username=""
+        local default_cws_password=""
+        local default_xpanel_username=""
+        local default_xpanel_password=""
+        local default_html_username=""
+        local default_html_password=""
 
-        local safe_room
-        safe_room="$(sanitize_pam_id "$room_id")"
-        local service="vc4-room-${safe_room}-auth"
-        local credentials="/etc/httpd/conf.d/vc4-pam-room-${safe_room}.credentials"
-        write_credentials_file "$credentials" "$username" "$password"
-        write_pam_service "$service" "$credentials"
+        while IFS=$'\t' read -r kind room_id target username password room_regex _ || [[ -n "${kind:-}" ]]; do
+          [[ -z "${kind:-}" ]] && continue
+          if [[ -z "${username:-}" || -z "${password:-}" ]]; then
+            log "WARNING: skipping PAM room entry with missing username/password for room: ${room_id:-unknown}"
+            continue
+          fi
+          if [[ "$target" != "cws" && "$target" != "xpanel" && "$target" != "html" ]]; then
+            log "WARNING: skipping PAM room entry with unsupported target: ${target:-unknown}"
+            continue
+          fi
 
-        targets="${targets:-cws,xpanel,html}"
-        if [[ ",$targets," == *",cws,"* ]]; then
-          apache_auth_block '${CRESTRON_VC_4_WEBROOT}/Rooms/'"$room_id"'/cws/' "$service" >> "$block_file"
+          if [[ "$kind" == "default" ]]; then
+            case "$target" in
+              cws) default_cws_username="$username"; default_cws_password="$password" ;;
+              xpanel) default_xpanel_username="$username"; default_xpanel_password="$password" ;;
+              html) default_html_username="$username"; default_html_password="$password" ;;
+            esac
+            continue
+          fi
+
+          if [[ "$kind" != "room" || -z "${room_id:-}" ]]; then
+            log "WARNING: skipping PAM room entry with unsupported kind or missing room: ${kind:-unknown}"
+            continue
+          fi
+
+          local safe_room
+          safe_room="$(sanitize_pam_id "$room_id-$target")"
+          local service="vc4-room-${safe_room}-auth"
+          local credentials="/etc/httpd/conf.d/vc4-pam-room-${safe_room}.credentials"
+          write_credentials_file "$credentials" "$username" "$password"
+          write_pam_service "$service" "$credentials"
+          apache_auth_block "$(room_target_location "$room_id" "$target")" "$service" >> "$block_file"
+
+          room_regex="${room_regex:-}"
+          [[ -z "$room_regex" ]] && room_regex="$room_id"
+          case "$target" in
+            cws) cws_exclusions="$(append_unique_regex_part "$cws_exclusions" "$room_regex")" ;;
+            xpanel) xpanel_exclusions="$(append_unique_regex_part "$xpanel_exclusions" "$room_regex")" ;;
+            html) html_exclusions="$(append_unique_regex_part "$html_exclusions" "$room_regex")" ;;
+          esac
+          enabled=true
+        done <<< "$room_rows"
+
+        if [[ -n "$default_cws_username" && -n "$default_cws_password" ]]; then
+          write_credentials_file "/etc/httpd/conf.d/vc4-pam-room-default-cws.credentials" "$default_cws_username" "$default_cws_password"
+          write_pam_service "vc4-room-default-cws-auth" "/etc/httpd/conf.d/vc4-pam-room-default-cws.credentials"
+          apache_auth_match_block "$(room_target_location_match "$cws_exclusions" cws)" "vc4-room-default-cws-auth" >> "$block_file"
+          enabled=true
         fi
-        if [[ ",$targets," == *",xpanel,"* ]]; then
-          apache_auth_block '${CRESTRON_VC_4_WEBROOT}/Rooms/'"$room_id"'/XPanel/Core3XPanel.html' "$service" >> "$block_file"
+        if [[ -n "$default_xpanel_username" && -n "$default_xpanel_password" ]]; then
+          write_credentials_file "/etc/httpd/conf.d/vc4-pam-room-default-xpanel.credentials" "$default_xpanel_username" "$default_xpanel_password"
+          write_pam_service "vc4-room-default-xpanel-auth" "/etc/httpd/conf.d/vc4-pam-room-default-xpanel.credentials"
+          apache_auth_match_block "$(room_target_location_match "$xpanel_exclusions" xpanel)" "vc4-room-default-xpanel-auth" >> "$block_file"
+          enabled=true
         fi
-        if [[ ",$targets," == *",html,"* ]]; then
-          apache_auth_block '${CRESTRON_VC_4_WEBROOT}/Rooms/'"$room_id"'/Html/' "$service" >> "$block_file"
+        if [[ -n "$default_html_username" && -n "$default_html_password" ]]; then
+          write_credentials_file "/etc/httpd/conf.d/vc4-pam-room-default-html.credentials" "$default_html_username" "$default_html_password"
+          write_pam_service "vc4-room-default-html-auth" "/etc/httpd/conf.d/vc4-pam-room-default-html.credentials"
+          apache_auth_match_block "$(room_target_location_match "$html_exclusions" html)" "vc4-room-default-html-auth" >> "$block_file"
+          enabled=true
         fi
-        enabled=true
-      done < "$VC4_PAM_ROOM_CREDENTIALS_FILE"
+      fi
     fi
   fi
 
@@ -237,43 +358,6 @@ Domain = $domain
 Port = $port
 EOF
   chown virtualcontroluser.virtualcontroluser "$conf" || true
-}
-
-configure_cgroup_settings() {
-  local target="/opt/crestron/virtualcontrol/conf/vc4cgconfig.conf"
-
-  if [[ -z "${VC4_CGROUP_CONFIG_FILE:-}" ]]; then
-    return 0
-  fi
-
-  if [[ ! -f "$VC4_CGROUP_CONFIG_FILE" ]]; then
-    log "WARNING: VC4_CGROUP_CONFIG_FILE not found: $VC4_CGROUP_CONFIG_FILE"
-    return 0
-  fi
-
-  log "Installing VC4 cgroup config from $VC4_CGROUP_CONFIG_FILE"
-  cp "$VC4_CGROUP_CONFIG_FILE" "$target"
-  chown virtualcontroluser.virtualcontroluser "$target" || true
-  cgconfigparser --load="$target" || true
-}
-
-apply_system_table_hardening() {
-  local payload=""
-  local api="http://127.0.0.1/VirtualControl/config/settings/WebApi/SystemTable"
-
-  if [[ -n "${VC4_SECURE_GATEWAY_MODE:-}" ]]; then
-    payload="\"SecureGatewayMode\":$VC4_SECURE_GATEWAY_MODE"
-  fi
-  if [[ -n "${VC4_OCSP_STATE:-}" ]]; then
-    [[ -n "$payload" ]] && payload="$payload,"
-    payload="${payload}\"OCSPState\":$VC4_OCSP_STATE"
-  fi
-
-  [[ -z "$payload" ]] && return 0
-
-  log "Applying VC4 SystemTable hardening settings"
-  curl -fsS -m 10 -X PUT -H 'Content-Type: application/json' -d "{$payload}" "$api" || \
-    log "WARNING: failed to apply VC4 SystemTable hardening settings"
 }
 
 unit_exists() {
@@ -385,15 +469,14 @@ touch \
 # Your original runtime script used Debian-ish names like apache2 and redis-server.
 start_first_available "MariaDB/MySQL" mariadb.service mysql.service
 #start_first_available "Redis" redis.service redis-server.service
+configure_systemctl_restart_shim
 configure_tls_certificates
 configure_flash_policy
-configure_cgroup_settings
 configure_pam_authentication
 patch_restart_service_endpoint
 patch_frontend_localhost_mocks
 start_first_available "Apache/HTTPD" httpd.service apache2.service
 start_virtualcontrol_direct
-apply_system_table_hardening
 
 log "VC4 services started. Streaming logs..."
 
