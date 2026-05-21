@@ -26,6 +26,52 @@ run_vendor_script() {
   return "$rc"
 }
 
+source_vc4_environment() {
+  local env_file="/opt/crestron/virtualcontrol/conf/env_variables.cfg"
+
+  if [[ -f "$env_file" ]]; then
+    set +u
+    # shellcheck disable=SC1090
+    source "$env_file"
+    set -u
+  fi
+}
+
+configure_startup_compatibility_shims() {
+  local vc4_bin="/opt/crestron/virtualcontrol/CrestronApps/bin"
+
+  if [[ "${VC4_ENABLE_STARTUP_COMPAT_SHIMS:-false}" != "true" ]]; then
+    rm -f /usr/local/bin/EEPromApp
+    return 0
+  fi
+
+  log "Enabling Docker startup compatibility shims"
+
+  mkdir -p /data
+  touch /data/rebootReason
+  ln -sf /usr/local/sbin/vc4-eepromapp-shim /usr/local/bin/EEPromApp
+
+  for script in "$vc4_bin/startManaged.sh" "$vc4_bin/startManagedDotnet.sh"; do
+    if [[ -f "$script" ]]; then
+      perl -0pi -e 's~# Starting at index 4 grab \(args_length -  1 -   3\) arguments\.\s+.*?\n(?=(?:#echo "ExtraParams|if \[ \$AppNumber))~# Starting at index 4 grab (args_length -  1 -   3) arguments.\nif [ "\$#" -gt 4 ]; then\n  ExtraParams=\${\@:4:\$#-4}\nelse\n  ExtraParams=""\nfi\n\n~gs' "$script"
+    fi
+  done
+}
+
+start_appwatchdog_reboot_shim() {
+  if [[ "${VC4_ENABLE_APPWATCHDOG_REBOOT_SHIM:-false}" != "true" ]]; then
+    return 0
+  fi
+
+  if [[ ! -x /usr/local/bin/vc4-syslog-watch ]]; then
+    log "WARNING: AppWatchdog reboot shim requested, but vc4-syslog-watch is not installed"
+    return 0
+  fi
+
+  log "Starting AppWatchdog reboot event shim"
+  /usr/local/bin/vc4-syslog-watch &
+}
+
 patch_frontend_localhost_mocks() {
   local main_js="/opt/crestron/virtualcontrol/webui/main.js"
 
@@ -47,20 +93,47 @@ patch_restart_service_endpoint() {
     return 0
   fi
 
-  perl -0pi -e 's|\n# VC4 Docker restart shim begin\n.*?\n# VC4 Docker restart shim end\n\n||s' "$conf"
+  perl -0pi -e 's|\s*# VC4 Docker restart shim begin\n.*?# VC4 Docker restart shim end\n?||gs' "$conf"
   perl -0pi -e 's|\n# VC4 Docker RestartService override\nProxyPass "/VirtualControl/config/settings/WebApi/RestartService" "!"\nScriptAlias "/VirtualControl/config/settings/WebApi/RestartService" "/usr/local/libexec/vc4-restart-service.cgi"\n<Directory "/usr/local/libexec">\n  Options \+ExecCGI\n  Require all granted\n</Directory>\n\n|\n|g' "$conf"
-  perl -0pi -e 's|<LocationMatch "\^\$\{CRESTRON_VC_4_WEBROOT\}/config/settings/WebApi/\(\?!RestartService\\\$\)">(\n\s+ProxyPass "http://127\.0\.0\.1:\$\{CRESTRON_WEBAPI_CGI_PORT\}/"\n\s+ProxyPassReverse "http://127\.0\.0\.1:\$\{CRESTRON_WEBAPI_CGI_PORT\}/"\n\s+Header set Cache-Control "max-age=0, no-cache, no-store, must-revalidate, private"\n\s+Header set Pragma "no-cache"\n)</LocationMatch>|<Location "\${CRESTRON_VC_4_WEBROOT}/config/settings/WebApi/">$1</Location>|g' "$conf"
+  perl -0pi -e 's|\n# VC4 Docker settings WebApi proxy begin\n.*?# VC4 Docker settings WebApi proxy end\n?||gs' "$conf"
+  perl -0pi -e '$r=q{<Location "${CRESTRON_VC_4_WEBROOT}/config/settings/WebApi/">
+      ProxyPass "http://127.0.0.1:${CRESTRON_WEBAPI_CGI_PORT}/"
+      ProxyPassReverse "http://127.0.0.1:${CRESTRON_WEBAPI_CGI_PORT}/"
+      Header set Cache-Control "max-age=0, no-cache, no-store, must-revalidate, private"
+      Header set Pragma "no-cache"
+</Location>}; s~<LocationMatch "[^"]*CRESTRON_VC_4_WEBROOT[^"]*/config/settings/WebApi/[^"]*">\n.*?</LocationMatch>~$r~gs' "$conf"
 
   if [[ "${VC4_ENABLE_RESTART_SERVICE_SHIM:-false}" != "true" ]]; then
+    perl -0pi -e '$r=q{<Location "${CRESTRON_VC_4_WEBROOT}/config/settings/WebApi/">
+      ProxyPass "http://127.0.0.1:${CRESTRON_WEBAPI_CGI_PORT}/"
+      ProxyPassReverse "http://127.0.0.1:${CRESTRON_WEBAPI_CGI_PORT}/"
+      Header set Cache-Control "max-age=0, no-cache, no-store, must-revalidate, private"
+      Header set Pragma "no-cache"
+</Location>}; s~# Settings api redirect\s*~"# Settings api redirect\n$r\n"~e unless m~\$\{CRESTRON_VC_4_WEBROOT\}/config/settings/WebApi/~' "$conf"
     return 0
   fi
 
-  perl -0pi -e 's|AliasMatch "\(\?i\)\^\$\{CRESTRON_VC_4_WEBROOT\}/config/status\(.\*\)"|# VC4 Docker restart shim begin\nProxyPass "/VirtualControl/config/settings/WebApi/RestartService" "!"\nScriptAlias "/VirtualControl/config/settings/WebApi/RestartService" "/usr/local/libexec/vc4-restart-service.cgi"\n<Directory "/usr/local/libexec">\n  Options +ExecCGI\n  Require all granted\n</Directory>\n# VC4 Docker restart shim end\n\nAliasMatch "(?i)^\${CRESTRON_VC_4_WEBROOT}/config/status(.*)"|' "$conf"
+  perl -0pi -e 's|AliasMatch "\(\?i\)\^\$\{CRESTRON_VC_4_WEBROOT\}/config/status\(.\*\)"|\n# VC4 Docker restart shim begin\nProxyPass "/VirtualControl/config/settings/WebApi/RestartService" "!"\nScriptAlias "/VirtualControl/config/settings/WebApi/RestartService" "/usr/local/libexec/vc4-restart-service.cgi"\n<Directory "/usr/local/libexec">\n  Options +ExecCGI\n  Require all granted\n</Directory>\n# VC4 Docker restart shim end\n\nAliasMatch "(?i)^\${CRESTRON_VC_4_WEBROOT}/config/status(.*)"|' "$conf"
 
   # Keep every settings WebApi route on the vendor backend except the service
-  # restart URL. The original broad Location proxy wins over ScriptAlias, so
-  # narrow it with a negative match instead of relying on Location precedence.
-  perl -0pi -e 's|<Location(?:Match)? "\^?\$?\{?CRESTRON_VC_4_WEBROOT\}?/config/settings/WebApi/[^"]*">(\n\s+ProxyPass "http://127\.0\.0\.1:\$\{CRESTRON_WEBAPI_CGI_PORT\}/"\n\s+ProxyPassReverse "http://127\.0\.0\.1:\$\{CRESTRON_WEBAPI_CGI_PORT\}/"\n\s+Header set Cache-Control "max-age=0, no-cache, no-store, must-revalidate, private"\n\s+Header set Pragma "no-cache"\n)</Location(?:Match)?>|<LocationMatch "^\${CRESTRON_VC_4_WEBROOT}/config/settings/WebApi/(?!RestartService\$)">$1</LocationMatch>|' "$conf"
+  # restart URL. LocationMatch+ProxyPass does not strip the matched prefix, so
+  # use ProxyPassMatch to preserve the backend route shape, e.g. /LicenseMode.
+  perl -0pi -e '$r=q{# VC4 Docker settings WebApi proxy begin
+ProxyPassMatch "^${CRESTRON_VC_4_WEBROOT}/config/settings/WebApi/(?!RestartService$)(.*)$" "http://127.0.0.1:${CRESTRON_WEBAPI_CGI_PORT}/$1"
+ProxyPassReverse "${CRESTRON_VC_4_WEBROOT}/config/settings/WebApi/" "http://127.0.0.1:${CRESTRON_WEBAPI_CGI_PORT}/"
+<LocationMatch "^${CRESTRON_VC_4_WEBROOT}/config/settings/WebApi/(?!RestartService$)">
+      Header set Cache-Control "max-age=0, no-cache, no-store, must-revalidate, private"
+      Header set Pragma "no-cache"
+</LocationMatch>
+# VC4 Docker settings WebApi proxy end}; s~<Location "\$\{CRESTRON_VC_4_WEBROOT\}/config/settings/WebApi/">\n.*?</Location>~$r~gs' "$conf"
+  perl -0pi -e '$r=q{# VC4 Docker settings WebApi proxy begin
+ProxyPassMatch "^${CRESTRON_VC_4_WEBROOT}/config/settings/WebApi/(?!RestartService$)(.*)$" "http://127.0.0.1:${CRESTRON_WEBAPI_CGI_PORT}/$1"
+ProxyPassReverse "${CRESTRON_VC_4_WEBROOT}/config/settings/WebApi/" "http://127.0.0.1:${CRESTRON_WEBAPI_CGI_PORT}/"
+<LocationMatch "^${CRESTRON_VC_4_WEBROOT}/config/settings/WebApi/(?!RestartService$)">
+      Header set Cache-Control "max-age=0, no-cache, no-store, must-revalidate, private"
+      Header set Pragma "no-cache"
+</LocationMatch>
+# VC4 Docker settings WebApi proxy end}; s~# Settings api redirect\s*~"# Settings api redirect\n$r\n"~e unless /# VC4 Docker settings WebApi proxy begin/' "$conf"
 }
 
 configure_systemctl_restart_shim() {
@@ -402,6 +475,7 @@ start_virtualcontrol_direct() {
   local vc4_bin="/opt/crestron/virtualcontrol/CrestronApps/bin"
 
   log "Starting VirtualControl directly"
+  source_vc4_environment
 
   run_vendor_script "$vc4_bin/cleanupVC4.sh" start || true
 
@@ -423,7 +497,13 @@ start_virtualcontrol_direct() {
     return 1
   fi
 
-  sleep 10
+  for _ in {1..30}; do
+    if command -v ss >/dev/null 2>&1 && ss -ltn | grep -qE '127\.0\.0\.1:5000\b'; then
+      break
+    fi
+    sleep 2
+  done
+
   if command -v ss >/dev/null 2>&1 && ! ss -ltn | grep -qE '127\.0\.0\.1:5000\b'; then
     log "WebApp is not listening on 127.0.0.1:5000; starting it directly"
     run_vendor_script "$vc4_bin/startNative.sh" WebApp webapp 0 NOPARAM "${TZ:-America/New_York}" || true
@@ -470,11 +550,13 @@ touch \
 start_first_available "MariaDB/MySQL" mariadb.service mysql.service
 #start_first_available "Redis" redis.service redis-server.service
 configure_systemctl_restart_shim
+configure_startup_compatibility_shims
 configure_tls_certificates
 configure_flash_policy
 configure_pam_authentication
 patch_restart_service_endpoint
 patch_frontend_localhost_mocks
+start_appwatchdog_reboot_shim
 start_first_available "Apache/HTTPD" httpd.service apache2.service
 start_virtualcontrol_direct
 

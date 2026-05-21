@@ -1,5 +1,7 @@
 services:
   vc4:
+    restart: unless-stopped
+    shm_size: "${VC4_SHM_SIZE:-512m}"
     build:
       context: .
       dockerfile: vc4/Dockerfile
@@ -14,6 +16,8 @@ services:
     environment:
       VC4_DISABLE_FRONTEND_LOCALHOST_MOCKS: "true"
       VC4_ENABLE_RESTART_SERVICE_SHIM: "true"
+      VC4_ENABLE_STARTUP_COMPAT_SHIMS: "true"
+      VC4_ENABLE_APPWATCHDOG_REBOOT_SHIM: "true"
       # Hardening options from the VC-4 manual. Leave empty/false to keep the
       # vendor defaults. Mount referenced files into the container first.
       VC4_TLS_CERT_FILE: "${VC4_TLS_CERT_FILE:-}"

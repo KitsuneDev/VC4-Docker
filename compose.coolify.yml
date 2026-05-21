@@ -2,6 +2,7 @@ services:
   vc4:
     image: ${VC4_IMAGE:-registry.example.com/vc4-docker:latest}
     restart: unless-stopped
+    shm_size: "${VC4_SHM_SIZE:-512m}"
     ports:
       - "${VC4_HTTP_PORT:-8847}:80"
       - "${VC4_HTTPS_PORT:-8848}:443"
@@ -13,6 +14,8 @@ services:
     environment:
       VC4_DISABLE_FRONTEND_LOCALHOST_MOCKS: "${VC4_DISABLE_FRONTEND_LOCALHOST_MOCKS:-true}"
       VC4_ENABLE_RESTART_SERVICE_SHIM: "${VC4_ENABLE_RESTART_SERVICE_SHIM:-true}"
+      VC4_ENABLE_STARTUP_COMPAT_SHIMS: "${VC4_ENABLE_STARTUP_COMPAT_SHIMS:-true}"
+      VC4_ENABLE_APPWATCHDOG_REBOOT_SHIM: "${VC4_ENABLE_APPWATCHDOG_REBOOT_SHIM:-true}"
 
       VC4_TLS_CERT_FILE: "${VC4_TLS_CERT_FILE:-}"
       VC4_TLS_KEY_FILE: "${VC4_TLS_KEY_FILE:-}"

@@ -60,7 +60,13 @@ start_vc4_processes() {
   run_vendor_script "$vc4_bin/startVC4Root.sh" start || true
   run_vendor_script "$vc4_bin/startVC4.sh" start || true
 
-  sleep 10
+  for _ in {1..30}; do
+    if port_5000_listening; then
+      break
+    fi
+    sleep 2
+  done
+
   if ! port_5000_listening; then
     log "WebApp is not listening on 127.0.0.1:5000; starting it directly"
     run_vendor_script "$vc4_bin/startNative.sh" WebApp webapp 0 NOPARAM "${TZ:-America/New_York}" || true

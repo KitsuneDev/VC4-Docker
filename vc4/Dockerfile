@@ -4,8 +4,10 @@ WORKDIR /src/helpers
 RUN apk add --no-cache musl-dev
 COPY helpers/Cargo.toml ./Cargo.toml
 COPY helpers/vc4-room-auth/Cargo.toml ./vc4-room-auth/Cargo.toml
+COPY helpers/vc4-syslog-watch/Cargo.toml ./vc4-syslog-watch/Cargo.toml
 COPY helpers/vc4-room-auth/src ./vc4-room-auth/src
-RUN cargo build --release --target x86_64-unknown-linux-musl -p vc4-room-auth
+COPY helpers/vc4-syslog-watch/src ./vc4-syslog-watch/src
+RUN cargo build --release --target x86_64-unknown-linux-musl -p vc4-room-auth -p vc4-syslog-watch
 
 FROM rockylinux/rockylinux:9.3
 
@@ -61,10 +63,12 @@ RUN sed -i 's/\r$//' /usr/local/bin/install-vc4-rocky9.exp && \
 RUN mkdir -p /usr/local/libexec
 
 COPY --from=helpers /src/helpers/target/x86_64-unknown-linux-musl/release/vc4-room-auth /usr/local/bin/vc4-room-auth
+COPY --from=helpers /src/helpers/target/x86_64-unknown-linux-musl/release/vc4-syslog-watch /usr/local/bin/vc4-syslog-watch
 COPY vc4/vc4-entrypoint.sh /usr/local/sbin/vc4-entrypoint.sh
 COPY vc4/vc4-container-restart.sh /usr/local/sbin/vc4-container-restart.sh
 COPY vc4/vc4-container-restart-launch.sh /usr/local/sbin/vc4-container-restart-launch.sh
 COPY vc4/vc4-systemctl-shim /usr/local/sbin/vc4-systemctl-shim
+COPY vc4/vc4-eepromapp-shim /usr/local/sbin/vc4-eepromapp-shim
 COPY vc4/vc4-pam-file-auth.sh /usr/local/sbin/vc4-pam-file-auth.sh
 COPY vc4/vc4-restart-service.cgi /usr/local/libexec/vc4-restart-service.cgi
 RUN chmod +x \
@@ -72,6 +76,7 @@ RUN chmod +x \
     /usr/local/sbin/vc4-container-restart.sh \
     /usr/local/sbin/vc4-container-restart-launch.sh \
     /usr/local/sbin/vc4-systemctl-shim \
+    /usr/local/sbin/vc4-eepromapp-shim \
     /usr/local/sbin/vc4-pam-file-auth.sh \
     /usr/local/libexec/vc4-restart-service.cgi
 
@@ -82,13 +87,16 @@ RUN dnf -y install libatomic && \
     ldconfig && \
     cat > /usr/local/bin/cgconfigparser <<'EOF' && \
     #!/usr/bin/env bash
-    echo "[container] ignoring legacy cgconfigparser call: $*" >&2
+    echo "[container] ignoring legacy $(basename "$0") call: $*" >&2
 exit 0
 EOF
 RUN chmod +x /usr/local/bin/cgconfigparser && \
     ln -sf /usr/local/bin/cgconfigparser /usr/bin/cgconfigparser && \
     ln -sf /usr/local/bin/cgconfigparser /usr/sbin/cgconfigparser && \
+    ln -sf /usr/local/bin/cgconfigparser /usr/bin/cgclassify && \
+    ln -sf /usr/local/bin/cgconfigparser /usr/sbin/cgclassify && \
     command -v cgconfigparser && \
+    command -v cgclassify && \
     ldconfig -p | grep -F libatomic
 
 RUN dnf -y install mod_ssl mod_authnz_pam && \

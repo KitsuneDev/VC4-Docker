@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+echo "[container] ignoring legacy EEPromApp call: $*" >&2
+exit 0

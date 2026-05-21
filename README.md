@@ -41,14 +41,21 @@ Persistent data is stored in named volumes:
 - `vc4_crestron`
 - `vc4_redis`
 
+VC-4 uses POSIX shared memory for watchdog and service coordination. The compose
+files set `VC4_SHM_SIZE=512m`; keep this above Docker's 64 MB default or
+`AppWatchdog` can crash during startup or restart-required settings changes.
+
 ## Patches
 
 These are enabled in `docker-compose.yml`:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
+| `VC4_SHM_SIZE` | `512m` | Sizes `/dev/shm` for VC-4 watchdog and IPC files. |
 | `VC4_DISABLE_FRONTEND_LOCALHOST_MOCKS` | `true` | Normally, accessing VC4 through `localhost` doesn't actually connect to the backend, and just loads Mock data. This fixes it. |
 | `VC4_ENABLE_RESTART_SERVICE_SHIM` | `true` | Allows VC-4 service restarts to work inside Docker, including the Restart button and backend calls to `systemctl restart virtualcontrol.service`. |
+| `VC4_ENABLE_STARTUP_COMPAT_SHIMS` | `true` | Provides Docker-only compatibility for startup paths VC-4 expects on an appliance, including `/data/rebootReason`, `EEPromApp`, and a vendor wrapper argument bug. |
+| `VC4_ENABLE_APPWATCHDOG_REBOOT_SHIM` | `true` | Listens for VC-4's AppWatchdog reboot event and maps it to a Docker-safe VC-4 service restart. |
 | [TLS Certificates](#tls-certificates) | `Off` | Handles building the TLS Config. |
 | [Flash Policy Server](#flash-policy-server) | `Off` | Configures the VC-4 Flash policy server. |
 | [PAM Authentication](#pam-authentication) | `Off` | Allows you to set username/password combinations for Admin and individual rooms. |

@@ -1,5 +1,5 @@
 [workspace]
-members = ["vc4-room-auth"]
+members = ["vc4-room-auth", "vc4-syslog-watch"]
 resolver = "2"
 
 [workspace.package]
