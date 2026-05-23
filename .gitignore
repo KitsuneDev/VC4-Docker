@@ -1,3 +1,4 @@
 vc4/installer/*
 !vc4/installer/.gitkeep
-helpers/target/
+vc4/helpers/target/
+experiments

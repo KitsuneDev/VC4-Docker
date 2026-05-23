@@ -3,8 +3,8 @@ services:
     restart: unless-stopped
     shm_size: "${VC4_SHM_SIZE:-512m}"
     build:
-      context: .
-      dockerfile: vc4/Dockerfile
+      context: vc4
+      dockerfile: Dockerfile
     ports:
       - 8847:80
       - 8848:443
